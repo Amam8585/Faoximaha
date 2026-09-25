@@ -25,7 +25,7 @@ final class TelegramClient implements TelegramGateway
         $this->request($token, 'setWebhook', ['url' => $url, 'secret_token' => $secret,
             'allowed_updates' => json_encode(['message', 'callback_query'], JSON_THROW_ON_ERROR), 'max_connections' => '20']);
         $info = $this->getWebhookInfo($token);
-        if (!hash_equals($url, $info['url'])) {
+        if (str_contains($info['url'], '?child=') || !hash_equals($url, $info['url'])) {
             throw new ProvisioningException('Telegram webhook verification returned a different URL.');
         }
     }
@@ -43,7 +43,8 @@ final class TelegramClient implements TelegramGateway
         $result = $this->request($token, 'getWebhookInfo', []);
         if (!is_array($result)) { throw new ProvisioningException('Telegram getWebhookInfo returned an invalid result.'); }
         return ['url' => is_string($result['url'] ?? null) ? $result['url'] : '',
-            'pending_update_count' => is_int($result['pending_update_count'] ?? null) ? $result['pending_update_count'] : 0];
+            'pending_update_count' => is_int($result['pending_update_count'] ?? null) ? $result['pending_update_count'] : 0,
+            'last_error_message' => is_string($result['last_error_message'] ?? null) ? $result['last_error_message'] : ''];
     }
 
     /** @param array<string,string> $fields */

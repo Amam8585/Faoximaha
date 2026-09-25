@@ -3,6 +3,8 @@ declare(strict_types=1);
 date_default_timezone_set('Asia/Tehran');
 const START_GIF='https://vste.s6.viptelbot.top/artin/new/start.gif';
 
+foreach(['ProvisioningException.php','Contracts.php','CommandRunner.php','AtomicFilesystem.php','ConfigEditor.php','PdoDatabaseAdmin.php','TelegramClient.php','Provisioner.php'] as $provisioningFile)require_once __DIR__.'/provisioning/'.$provisioningFile;
+
 function esc(string $s):string{return htmlspecialchars($s,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');}
 
 function cut(string $s,int $n):string{return function_exists('mb_substr')?mb_substr($s,0,$n,'UTF-8'):substr($s,0,$n);}
@@ -206,39 +208,38 @@ function botView(int $u,int $m,string $sid):void{
 }
 function botList(int $u,int $m,bool $all=false):void{$kb=[];foreach(array_reverse(dbread()['bots'],true) as $id=>$x)if($all||(int)$x['uid']===$u)$kb[]=[b('🤖 | #'.$id.' @'.$x['username'].' · '.cut(statusLabel($x['status']),30),($all?'ab|':'bot|').$id)];$empty=!$kb;$kb[]=back($all?'admin':'home');page($u,$m,($all?'🤖 | مدیریت ربات‌ها':'📦 | اشتراک‌های من').($empty?"\n\nهنوز رباتی ثبت نشده است.":''),$kb);}
 function templateRoot():string{return rtrim((string)(getenv('MUTESHOP_TEMPLATE_ROOT')?:'/opt/muteshop/template'),'/');}
+function faoximaBotName(int|string $sid):string{$sid=(string)$sid;if(!preg_match('/^[1-9][0-9]{0,8}$/D',$sid))throw new RuntimeException('شناسه نصب Faoxima نامعتبر است.');return'bot_'.$sid;}
+function faoximaVersion():string{$file=templateRoot().'/version';$v=is_file($file)?trim((string)file_get_contents($file)):'';return preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/D',$v)?$v:'current';}
+function faoximaProvisioner():\Faoxima\Provisioning\Provisioner{
+ $commands=new \Faoxima\Provisioning\CommandRunner();
+ $database=new \Faoxima\Provisioning\PdoDatabaseAdmin(provisionPdo(),$commands);
+ return new \Faoxima\Provisioning\Provisioner($database,new \Faoxima\Provisioning\TelegramClient(),$commands,[
+  'web_root'=>(string)(getenv('FAOXIMA_WEB_ROOT')?:'/var/www/faoxima'),'source_root'=>templateRoot(),
+  'state_root'=>(string)(getenv('FAOXIMA_STATE_ROOT')?:'/var/lib/faoxima-provisioner'),'lock_root'=>(string)(getenv('FAOXIMA_LOCK_ROOT')?:'/run/lock/faoxima-provisioner'),
+  'domain'=>(string)(getenv('FAOXIMA_DOMAIN')?:'kanamir.faoximabot.xyz'),'url_prefix'=>'/faoxima',
+  'php_binary'=>(string)(getenv('FAOXIMA_PHP_BINARY')?:'/usr/bin/php8.3'),'runtime_user'=>(string)(getenv('FAOXIMA_RUNTIME_USER')?:'www-data'),
+ ]);
+}
 function provisionPdo():PDO{
  $host=(string)(getenv('MUTESHOP_MYSQL_HOST')?:'127.0.0.1');$port=(int)(getenv('MUTESHOP_MYSQL_PORT')?:3306);$user=trim((string)getenv('MUTESHOP_MYSQL_ADMIN_USER'));$pass=(string)getenv('MUTESHOP_MYSQL_ADMIN_PASS');
  $cfg='/etc/muteshop/mysql-provisioner.php';if($user===''&&is_readable($cfg)){$x=require $cfg;if(is_array($x)){$host=(string)($x['host']??$host);$port=(int)($x['port']??$port);$user=trim((string)($x['user']??''));$pass=(string)($x['pass']??'');}}
  if($user==='')throw new RuntimeException('تنظیمات MySQL Provisioner موجود نیست. MUTESHOP_MYSQL_ADMIN_USER یا /etc/muteshop/mysql-provisioner.php را تنظیم کنید.');
  return new PDO('mysql:host='.$host.';port='.$port.';charset=utf8mb4',$user,$pass,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC,PDO::ATTR_EMULATE_PREPARES=>false,PDO::ATTR_PERSISTENT=>false]);
 }
-function provisionIdent(string $v):string{if(!preg_match('/^[A-Za-z0-9_]{1,64}$/D',$v))throw new RuntimeException('شناسه دیتابیس نامعتبر است.');return'`'.$v.'`';}
-function botDbSpec(int $sid):array{$suffix=str_pad((string)$sid,6,'0',STR_PAD_LEFT);return['name'=>'muteshop_bot_'.$suffix,'user'=>'mbot_'.$suffix,'host'=>'127.0.0.1'];}
-function runFaoximaMigrations(array $spec,string $pass):void{
- $root=templateRoot();$table=$root.'/table.php';$config=$root.'/config.php';if(!is_readable($table)||!is_readable($config))throw new RuntimeException('فایل‌های config.php/table.php قالب Faoxima پیدا نشد.');
- $tmp=sys_get_temp_dir().'/faoxima_'.$spec['name'].'_'.bin2hex(random_bytes(4));if(!mkdir($tmp,0700,true))throw new RuntimeException('ساخت پوشه موقت Migration ناموفق بود.');
- try{
-  $cmd='cp -a '.escapeshellarg($root.'/.').' '.escapeshellarg($tmp.'/');exec($cmd,$o,$rc);if($rc!==0)throw new RuntimeException('کپی قالب برای Migration ناموفق بود.');
-  $cf=$tmp.'/config.php';$raw=file_get_contents($cf);if($raw===false)throw new RuntimeException('خواندن config.php ناموفق بود.');
-  $vals=['dbname'=>$spec['name'],'usernamedb'=>$spec['user'],'passworddb'=>$pass,'dbhost'=>$spec['host']];foreach($vals as $k=>$v){$q=var_export($v,true);$pattern="/\\$".preg_quote($k,'/')."\\s*=\\s*(['\"]).*?\\1\\s*;/";$n=preg_replace($pattern,'$'.$k.'='.$q.';',$raw,1,$count);if(!$count)throw new RuntimeException('فیلد '.$k.' در config.php پیدا نشد.');$raw=$n;}file_put_contents($cf,$raw,LOCK_EX);
-  $php=is_executable('/usr/bin/php8.3')?'/usr/bin/php8.3':PHP_BINARY;$cmd=escapeshellarg($php).' '.escapeshellarg($tmp.'/table.php').' 2>&1';exec($cmd,$out,$rc);if($rc!==0)throw new RuntimeException('Migration Faoxima ناموفق بود: '.cut(implode(' | ',$out),500));
-  $pdo=new PDO('mysql:host='.$spec['host'].';dbname='.$spec['name'].';charset=utf8mb4',$spec['user'],$pass,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION,PDO::ATTR_PERSISTENT=>false]);$need=['user','setting','admin','channels','marzban_panel','product','invoice','Payment_report','textbot','shopSetting','support_message','crypto_wallets','processed_updates','cron_runtime_state'];$have=$pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);$miss=array_values(array_diff($need,$have));if($miss)throw new RuntimeException('جدول‌های ناقص: '.implode(',',$miss));
- }finally{if(is_dir($tmp))exec('rm -rf '.escapeshellarg($tmp));}
-}
-function provisionBotDatabase(int $sid):array{
- $spec=botDbSpec($sid);$pdo=provisionPdo();$db=provisionIdent($spec['name']);$user=$spec['user'];$pass=rtrim(strtr(base64_encode(random_bytes(24)),'+/','-_'),'=');
- try{$pdo->exec("CREATE DATABASE IF NOT EXISTS $db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");$account=$pdo->quote($user)."@'localhost'";$pdo->exec("CREATE USER IF NOT EXISTS ".$account." IDENTIFIED BY ".$pdo->quote($pass));$pdo->exec("ALTER USER ".$account." IDENTIFIED BY ".$pdo->quote($pass));$pdo->exec("GRANT ALL PRIVILEGES ON $db.* TO ".$account);runFaoximaMigrations($spec,$pass);return['db_name'=>$spec['name'],'db_user'=>$user,'db_pass'=>$pass,'db_host'=>$spec['host'],'schema_at'=>time()];}
- catch(Throwable $e){try{$pdo->exec('DROP DATABASE IF EXISTS '.$db);$pdo->exec('DROP USER IF EXISTS '.$pdo->quote($user)."@'localhost'");}catch(Throwable $ignore){}throw $e;}
-}
 function installBot(int $sid,int $actor):array{
- if(!isAdmin($actor))return['ok'=>false,'reason'=>'دسترسی ندارید.'];$url=publicUrl();if(!validUrl($url))return['ok'=>false,'reason'=>'آدرس HTTPS همین فایل را در تنظیمات ثبت کنید.'];
+ if(!isAdmin($actor))return['ok'=>false,'reason'=>'دسترسی ندارید.'];
  $lock=fopen(DB.'.bot.'.$sid.'.lock','c+');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB))return['ok'=>false,'reason'=>'عملیات دیگری در حال اجراست.'];
- try{$x=dbmut(function(&$d)use($sid){$b=$d['bots'][(string)$sid]??[];if(!$b||!in_array($b['status'],['pending','setup_failed','installing'],true))return null;$b=&$d['bots'][(string)$sid];$b['status']='installing';return$b;});if(!$x)return['ok'=>false,'reason'=>'وضعیت سفارش تغییر کرده است.'];
- try{$dbSpec=provisionBotDatabase($sid);dbmut(function(&$d)use($sid,$dbSpec){$b=&$d['bots'][(string)$sid];$b['db_name']=$dbSpec['db_name'];$b['db_user']=$dbSpec['db_user'];$b['db_host']=$dbSpec['db_host'];$b['db_sealed']=sealPayload(['password'=>$dbSpec['db_pass']]);$b['schema_at']=$dbSpec['schema_at'];addBotEvent($d,(string)$sid,'ساخت دیتابیس اختصاصی',ADMIN);});}catch(Throwable $e){dbmut(function(&$d)use($sid,$e){$b=&$d['bots'][(string)$sid];$b['status']='setup_failed';$b['last_error']='ساخت دیتابیس ناموفق: '.$e->getMessage();});return['ok'=>false,'reason'=>'ساخت دیتابیس اختصاصی ناموفق بود: '.$e->getMessage()];}
- $token=openPayload($x)['token'];$r=api($token,'setWebhook',['url'=>$url.'?child='.$sid,'secret_token'=>$x['webhook_secret'],'allowed_updates'=>json_encode(['message','callback_query']),'max_connections'=>2]);
- dbmut(function(&$d)use($sid,$r){$b=&$d['bots'][(string)$sid];$ok=(bool)($r['ok']??false);$b['status']=$ok?'active':'setup_failed';$b['last_error']=$ok?'':'اتصال وبهوک ناموفق؛ توکن، HTTPS و دسترسی تلگرام را بررسی کنید.';
- if($ok){if(!$b['expires'])$b['expires']=time()+$b['days']*86400;$d['orders'][(string)$b['order_id']]['status']='active';addBotEvent($d,(string)$sid,'تأیید مدیر و اتصال موفق',ADMIN);notifyLater($d,(int)$b['uid'],'✅ | ربات شما فعال شد: @'.esc($b['username']),'activated:'.$sid,[[b('🤖 | مدیریت ربات','bot|'.$sid)]]);}});
- return['ok'=>(bool)($r['ok']??false),'reason'=>($r['ok']??false)?'ربات فعال شد.':'اتصال ناموفق؛ امکان تلاش مجدد یا بازپرداخت دارید.'];
+ try{
+  $x=dbmut(function(&$d)use($sid){$b=$d['bots'][(string)$sid]??[];if(!$b||!in_array($b['status'],['pending','setup_failed','installing'],true))return null;$d['bots'][(string)$sid]['status']='installing';return$b;});
+  if(!$x)return['ok'=>false,'reason'=>'وضعیت سفارش تغییر کرده است.'];
+  try{
+   $token=openPayload($x)['token'];$owned=null;
+   if(!empty($x['db_name'])&&!empty($x['db_user'])&&!empty($x['db_sealed'])){$sealedDb=openPayload(['sealed'=>$x['db_sealed']]);if(is_string($sealedDb['password']??null)&&$sealedDb['password']!=='')$owned=['name'=>(string)$x['db_name'],'user'=>(string)$x['db_user'],'password'=>$sealedDb['password']];}
+   $rememberDatabase=function(array $credentials)use($sid):void{dbmut(function(&$d)use($sid,$credentials){$b=&$d['bots'][(string)$sid];$b['db_name']=$credentials['name'];$b['db_user']=$credentials['user'];$b['db_host']='localhost';$b['db_sealed']=sealPayload(['password'=>$credentials['password']]);$b['schema_at']=$b['schema_at']??time();});};
+   $credentials=faoximaProvisioner()->installBot(faoximaBotName($sid),faoximaVersion(),$token,(string)$x['uid'],$owned,$rememberDatabase);
+   dbmut(function(&$d)use($sid,$credentials){$b=&$d['bots'][(string)$sid];$b['db_name']=$credentials['name'];$b['db_user']=$credentials['user'];$b['db_host']='localhost';$b['db_sealed']=sealPayload(['password'=>$credentials['password']]);$b['schema_at']=time();$b['status']='active';$b['last_error']='';if(!$b['expires'])$b['expires']=time()+$b['days']*86400;$d['orders'][(string)$b['order_id']]['status']='active';addBotEvent($d,(string)$sid,'نصب مستقل Faoxima و اتصال مستقیم webhook',ADMIN);notifyLater($d,(int)$b['uid'],'✅ | ربات شما فعال شد: @'.esc($b['username']),'activated:'.$sid,[[b('🤖 | مدیریت ربات','bot|'.$sid)]]);});
+   return['ok'=>true,'reason'=>'ربات فعال شد.'];
+  }catch(Throwable $e){dbmut(function(&$d)use($sid,$e){if(isset($d['bots'][(string)$sid])){$d['bots'][(string)$sid]['status']='setup_failed';$d['bots'][(string)$sid]['last_error']='Provisioning: '.$e->getMessage();}});return['ok'=>false,'reason'=>'نصب مستقل Faoxima ناموفق بود: '.$e->getMessage()];}
  }finally{flock($lock,LOCK_UN);fclose($lock);}
 }
 function refundBot(int $sid,int $actor,string $reason='لغو سفارش توسط مدیر'):array{
@@ -287,15 +288,15 @@ function cb(array $q):void{
  if($act==='checkout'){$r=checkout($u,$v);if(!$r['ok']){ans($id,$r['reason'],true);return;}botView($u,$m,(string)$r['sid']);return;}
  if($act==='my_bots'){botList($u,$m);return;}if($act==='bot'||$act==='ab'){botView($u,$m,$v);return;}
  if($act==='bot_refresh'){botView($u,$m,$v);return;}
- if($act==='bot_update'){$x=dbread()['bots'][$v]??[];if(!owns($x,$u)||!in_array($x['status'],['active','paused','expired'],true)){ans($id,'این ربات قابل بروزرسانی نیست.',true);return;}try{$token=openPayload($x)['token'];$url=publicUrl();$r=api($token,'setWebhook',['url'=>$url.'?child='.$v,'secret_token'=>$x['webhook_secret'],'allowed_updates'=>json_encode(['message','callback_query']),'max_connections'=>2]);if(!($r['ok']??false)){ans($id,'بروزرسانی اتصال ربات ناموفق بود.',true);return;}dbmut(function(&$d)use($v,$u){if(isset($d['bots'][$v]))addBotEvent($d,$v,'بروزرسانی ربات',$u);});ans($id,'ربات با موفقیت بروزرسانی شد.');botView($u,$m,$v);return;}catch(Throwable $e){ans($id,'بروزرسانی ربات ناموفق بود.',true);return;}}
+ if($act==='bot_update'){$x=dbread()['bots'][$v]??[];if(!owns($x,$u)||!in_array($x['status'],['active','paused','expired'],true)){ans($id,'این ربات قابل بروزرسانی نیست.',true);return;}try{faoximaProvisioner()->updateBot(faoximaBotName($v),faoximaVersion());dbmut(function(&$d)use($v,$u){if(isset($d['bots'][$v]))addBotEvent($d,$v,'بروزرسانی اتمیک سورس مستقل',$u);});ans($id,'ربات با موفقیت بروزرسانی شد.');botView($u,$m,$v);return;}catch(Throwable $e){ans($id,'بروزرسانی ربات ناموفق بود: '.$e->getMessage(),true);return;}}
  if($act==='bot_delete'){$x=dbread()['bots'][$v]??[];if(!owns($x,$u)){ans($id,'این ربات در دسترس نیست.',true);return;}page($u,$m,"🗑 | حذف ربات #".$v."\n\n<blockquote>⚠️ آیا از حذف این ربات مطمئن هستید؟\nاین عملیات از داخل پنل قابل بازگشت نیست.</blockquote>",[[b('❌ | بله، حذف شود','bot_delete_confirm|'.$v)],[b('🔙 | انصراف','bot|'.$v)]]);return;}
- if($act==='bot_delete_confirm'){$x=dbread()['bots'][$v]??[];if(!owns($x,$u)){ans($id,'این ربات قبلاً حذف شده یا در دسترس نیست.',true);botList($u,$m);return;}try{$token=openPayload($x)['token']??'';if($token!=='')api($token,'deleteWebhook',['drop_pending_updates'=>false]);}catch(Throwable $e){}dbmut(function(&$d)use($v,$u){if(!isset($d['bots'][$v])||!owns($d['bots'][$v],$u))return;unset($d['bots'][$v]);$d['states'][(string)$u]=['step'=>'bots'];});ans($id,'ربات با موفقیت حذف شد.');botList($u,$m);return;}
+ if($act==='bot_delete_confirm'){$x=dbread()['bots'][$v]??[];if(!owns($x,$u)){ans($id,'این ربات قبلاً حذف شده یا در دسترس نیست.',true);botList($u,$m);return;}try{faoximaProvisioner()->deleteBot(faoximaBotName($v));dbmut(function(&$d)use($v,$u){if(!isset($d['bots'][$v])||!owns($d['bots'][$v],$u))return;unset($d['bots'][$v]);$d['states'][(string)$u]=['step'=>'bots'];});ans($id,'ربات با موفقیت حذف شد.');botList($u,$m);return;}catch(Throwable $e){ans($id,'حذف ربات rollback شد: '.$e->getMessage(),true);return;}}
  if(in_array($act,['pause','renew','retoken','bot_edit'],true)){$x=dbread()['bots'][$v]??[];if(!owns($x,$u)||!in_array($x['status'],['active','paused','expired'],true)){ans($id,'این ربات قابل مدیریت نیست.',true);return;}}
- if($act==='pause'){dbmut(function(&$d)use($u,$v){$x=&$d['bots'][$v];if(owns($x,$u)&&in_array($x['status'],['active','paused'],true)){$x['status']=$x['status']==='active'?'paused':'active';addBotEvent($d,$v,$x['status']==='paused'?'توقف توسط مالک':'شروع توسط مالک',$u);}});botView($u,$m,$v);return;}
+ if($act==='pause'){if(!in_array($x['status'],['active','paused'],true)){ans($id,'ربات منقضی را ابتدا تمدید کنید.',true);return;}$target=$x['status']==='active'?'paused':'active';try{faoximaProvisioner()->transition(faoximaBotName($v),$target);dbmut(function(&$d)use($u,$v,$target){$x=&$d['bots'][$v];if(owns($x,$u)){$x['status']=$target;addBotEvent($d,$v,$target==='paused'?'توقف توسط مالک':'شروع توسط مالک',$u);}});}catch(Throwable $e){ans($id,'تغییر وضعیت انجام نشد: '.$e->getMessage(),true);}botView($u,$m,$v);return;}
  if($act==='bot_edit'&&$f==='welcome'){ask($u,$m,'✏️ | متن شروع جدید را ارسال کنید (حداکثر ۱۵۰۰ نویسه).','bot_welcome',['sid'=>$v],'bot|'.$v);return;}
  if($act==='retoken'){ask($u,$m,'🔑 | توکن جدید همین ربات را ارسال کنید؛ شناسه ربات نباید تغییر کند.','retoken',['sid'=>$v],'bot|'.$v);return;}
  if($act==='renew'){$d=dbread();$x=$d['bots'][$v];$p=$d['bot_plans'][$x['plan']]??[];if((int)$x['uid']!==$u||!($p['active']??false)){ans($id,'تمدید این پلن در دسترس نیست.',true);return;}$q=['sid'=>$v,'price'=>(int)$p['price'],'days'=>(int)$p['days'],'expires'=>$x['expires'],'nonce'=>bin2hex(random_bytes(10)),'at'=>time()];page($u,$m,'🔄 | تمدید '.$q['days'].' روزه به مبلغ '.money($q['price']).' تومان',[[b('💳 | تأیید و پرداخت','renew_pay|'.$q['nonce'])],back('bot|'.$v)],['step'=>'renew','quote'=>$q]);return;}
- if($act==='renew_pay'){$r=renewBot($u,$v);ans($id,$r['reason'],true);if($r['ok'])botView($u,$m,(string)$r['sid']);return;}
+ if($act==='renew_pay'){$r=renewBot($u,$v);if($r['ok']){try{faoximaProvisioner()->transition(faoximaBotName($r['sid']),'active');}catch(Throwable $e){dbmut(function(&$d)use($r){if(isset($d['bots'][(string)$r['sid']]))$d['bots'][(string)$r['sid']]['status']='expired';});$r=['ok'=>false,'reason'=>'تمدید ثبت شد اما فعال‌سازی webhook ناموفق بود؛ دوباره تلاش کنید.'];}}ans($id,$r['reason'],true);if($r['ok'])botView($u,$m,(string)$r['sid']);return;}
  if($act==='wallet'){wallet($u,$m);return;}
  if($act==='deposit'){$s=dbread()['settings'];$kb=[];if($s['gateway_card']??true)$kb[]=[b('💳 | کارت به کارت','deposit_gateway|card')];if($s['gateway_atlas']??false)$kb[]=[b('🌐 | اطلس پی','deposit_gateway|atlas')];if($s['gateway_toon']??false)$kb[]=[b('🌐 | تون پی','deposit_gateway|toon')];$kb[]=back('wallet');page($u,$m,'💰 | انتخاب روش افزایش موجودی',$kb);return;}
  if($act==='deposit_gateway'){if($v==='card'){$s=dbread()['settings'];if(!($s['gateway_card']??true)||!$s['card_number']||!$s['card_owner']){ans($id,'درگاه کارت به کارت در دسترس نیست.',true);return;}ask($u,$m,'💵 | مبلغ شارژ را به تومان ارسال کنید.','deposit_amount',['gateway'=>'card'],'wallet');return;}if($v==='toon'){$cfg=dbread()['settings'];if(!($cfg['gateway_toon']??false)||trim((string)($cfg['toon_api']??''))===''){ans($id,'درگاه تون پی فعال نیست یا API آن ثبت نشده است.',true);return;}ask($u,$m,'💵 | مبلغ شارژ از طریق تون پی را به تومان ارسال کنید.','deposit_amount',['gateway'=>'toon'],'wallet');return;}if($v==='atlas'){ans($id,'درگاه اطلس پی فعلاً در حال آماده‌سازی است.',true);return;}return;}
@@ -338,7 +339,7 @@ function cb(array $q):void{
  if($act==='ad_edit'){ask($u,$m,"🎟 | شرایط را در چهار خط بفرستید:\nدرصد (۱ تا ۱۰۰)\nسقف کل مصرف (۰ نامحدود)\nسقف هر کاربر (۰ نامحدود)\nاعتبار به روز (۰ بدون انقضا)",'ad_rules',['code'=>$v],'ad|'.$v);return;}
  if(in_array($act,['install_confirm','refund_confirm'],true)){page($u,$m,$act==='install_confirm'?'✅ | اتصال ربات و جایگزینی وبهوک آن تأیید شود؟':'↩️ | سفارش لغو و مبلغ به کیف پول برگردد؟',[[b('✅ | تأیید',$act==='install_confirm'?'install_commit|'.$v:'refund_commit|'.$v)],back('ab|'.$v)],['step'=>$act,'sid'=>$v]);return;}
  if(in_array($act,['install_commit','refund_commit'],true)){$st=state($u);if(($st['sid']??'')!==$v||($st['step']??'')!==($act==='install_commit'?'install_confirm':'refund_confirm'))return;$r=$act==='install_commit'?installBot((int)$v,$u):refundBot((int)$v,$u);ans($id,$r['reason'],true);botView($u,$m,$v);return;}
- if($act==='suspend'){dbmut(function(&$d)use($v){$x=$d['bots'][$v]??[];if(!$x||!in_array($x['status'],['active','paused','expired','suspended'],true))return;$x=&$d['bots'][$v];if($x['status']==='suspended')$x['status']=$x['expires']<=time()?'expired':(($x['before_suspend']??'active')==='paused'?'paused':'active');else{$x['before_suspend']=$x['status'];$x['status']='suspended';}addBotEvent($d,$v,$x['status']==='suspended'?'تعلیق توسط مدیریت':'رفع تعلیق توسط مدیریت',ADMIN);});botView($u,$m,$v);return;}
+ if($act==='suspend'){$x=dbread()['bots'][$v]??[];if(!$x||!in_array($x['status'],['active','paused','expired','suspended'],true))return;$target=$x['status']==='suspended'?($x['expires']<=time()?'expired':(($x['before_suspend']??'active')==='paused'?'paused':'active')):'suspended';try{faoximaProvisioner()->transition(faoximaBotName($v),$target);dbmut(function(&$d)use($v,$target){$x=&$d['bots'][$v];if($target==='suspended')$x['before_suspend']=$x['status'];$x['status']=$target;addBotEvent($d,$v,$target==='suspended'?'تعلیق توسط مدیریت':'رفع تعلیق توسط مدیریت',ADMIN);});}catch(Throwable $e){ans($id,'تغییر تعلیق انجام نشد: '.$e->getMessage(),true);}botView($u,$m,$v);return;}
  if($act==='a_stats'){statsPage($u,$m);return;}
  ans($id,'این دکمه قدیمی یا نامعتبر است؛ /start را بزنید.',true);
  }finally{ans($id);}
@@ -358,7 +359,7 @@ function message(array $msg):void{
  $botid=(int)$r['result']['id'];
  if($step==='retoken'){$sid=(string)$s['sid'];$x=dbread()['bots'][$sid]??[];if(!owns($x,$u)||$botid!==(int)$x['telegram_id']||!in_array($x['status'],['active','paused','expired'],true)){$error('توکن باید متعلق به همین ربات باشد.');return;}
  $lock=fopen(DB.'.bot.'.$sid.'.lock','c+');if(!$lock||!flock($lock,LOCK_EX|LOCK_NB)){$error('عملیات دیگری در حال انجام است.');return;}
- try{$url=publicUrl();if(!validUrl($url)){$error('آدرس رباتساز توسط مدیر تنظیم نشده است.');return;}$resp=api($t,'setWebhook',['url'=>$url.'?child='.$sid,'secret_token'=>$x['webhook_secret'],'allowed_updates'=>json_encode(['message','callback_query']),'max_connections'=>2]);if(!($resp['ok']??false)){$error('اتصال توکن جدید ناموفق بود؛ دوباره تلاش کنید.');return;}$sealed=sealPayload(['token'=>$t]);dbmut(function(&$d)use($sid,$u,$sealed){if(owns($d['bots'][$sid]??[],$u)){$d['bots'][$sid]['sealed']=$sealed;addBotEvent($d,$sid,'تغییر توکن',$u);}});botView($u,$mid,$sid);return;}finally{flock($lock,LOCK_UN);fclose($lock);}}
+ try{faoximaProvisioner()->rotateToken(faoximaBotName($sid),$t);$sealed=sealPayload(['token'=>$t]);dbmut(function(&$d)use($sid,$u,$sealed){if(owns($d['bots'][$sid]??[],$u)){$d['bots'][$sid]['sealed']=$sealed;addBotEvent($d,$sid,'تغییر اتمیک توکن و webhook مستقیم',$u);}});botView($u,$mid,$sid);return;}catch(Throwable $e){$error('اتصال توکن جدید rollback شد: '.$e->getMessage());return;}finally{flock($lock,LOCK_UN);fclose($lock);}}
  foreach(dbread()['bots'] as $x)if((int)$x['telegram_id']===$botid&&$x['status']!=='refunded'){$error('این ربات قبلاً ثبت شده است.');return;}
  page($u,$mid,"🏷 | مرحله ۳ از ۸ — نام فروشگاه\n\nیک نام برای فروشگاه/ربات وارد کنید.\nمثال: Mute Shop",[[b('❌ | انصراف','buy')]],['step'=>'purchase_shop_name','plan'=>$s['plan'],'telegram_id'=>$botid,'username'=>$r['result']['username'],'sealed'=>sealPayload(['token'=>$t])]);return;
  }
@@ -402,10 +403,15 @@ function dispatchUpdate(array $up):void{
  $msg=$up['message']??null;$q=$up['callback_query']??null;$from=$q['from']??$msg['from']??[];$uid=(int)($from['id']??0);$chat=(int)($q['message']['chat']['id']??$msg['chat']['id']??0);if(!$uid||$uid!==$chat||($from['is_bot']??false))return;usertouch($from);
  if($q){$GLOBALS['incoming_text']=false;cb($q);}elseif($msg){$GLOBALS['incoming_text']=true;try{message($msg);}finally{$GLOBALS['incoming_text']=false;}}
 }
-function expiryReminders():void{dbmut(function(&$d){foreach($d['invoices'] as &$iv)if(($iv['status']??'')==='unpaid'&&(int)($iv['expires']??0)<time()){$iv['status']='expired';unset($iv['draft']);}unset($iv);foreach($d['bots'] as $sid=>&$x){if(!in_array($x['status'],['active','paused','expired','suspended'],true)||!$x['expires'])continue;$exp=(int)$x['expires'];if($exp<=time()){if(in_array($x['status'],['active','paused'],true))$x['status']='expired';notifyLater($d,(int)$x['uid'],'⌛ | اشتراک @'.esc($x['username']).' منقضی شد؛ از اشتراک‌های من تمدید کنید.','expired:'.$sid.':'.$exp);}elseif($exp-time()<=3*86400)notifyLater($d,(int)$x['uid'],'⏰ | کمتر از سه روز تا انقضای @'.esc($x['username']).' باقی مانده است.','expiry:'.$sid.':'.$exp);}unset($x);
- foreach($d['states'] as &$s)if(isset($s['sealed'])&&time()-(int)($s['at']??0)>1800){unset($s['sealed']);$s['step']='home';}unset($s);
-
- });}
+function expiryReminders():void{
+ $expired=[];
+ dbmut(function(&$d)use(&$expired){
+  foreach($d['invoices'] as &$iv)if(($iv['status']??'')==='unpaid'&&(int)($iv['expires']??0)<time()){$iv['status']='expired';unset($iv['draft']);}unset($iv);
+  foreach($d['bots'] as $sid=>&$x){if(!in_array($x['status'],['active','paused','expired','suspended'],true)||!$x['expires'])continue;$exp=(int)$x['expires'];if($exp<=time()){if(in_array($x['status'],['active','paused'],true)){$x['status']='expired';$expired[]=(string)$sid;}notifyLater($d,(int)$x['uid'],'⌛ | اشتراک @'.esc($x['username']).' منقضی شد؛ از اشتراک‌های من تمدید کنید.','expired:'.$sid.':'.$exp);}elseif($exp-time()<=3*86400)notifyLater($d,(int)$x['uid'],'⏰ | کمتر از سه روز تا انقضای @'.esc($x['username']).' باقی مانده است.','expiry:'.$sid.':'.$exp);}unset($x);
+  foreach($d['states'] as &$state)if(isset($state['sealed'])&&time()-(int)($state['at']??0)>1800){unset($state['sealed']);$state['step']='home';}unset($state);
+ });
+ foreach($expired as $sid){try{faoximaProvisioner()->transition(faoximaBotName($sid),'expired');}catch(Throwable $e){error_log('[faoxima-expire:'.$sid.'] '.$e->getMessage());}}
+}
 function worker(int $limit=10):void{
  $h=fopen(DB.'.worker.lock','c+');if(!$h||!flock($h,LOCK_EX|LOCK_NB))return;
  try{expiryReminders();dbmut(function(&$d){$d['meta']['worker_last_seen']=time();foreach($d['jobs'] as &$j)if($j['kind']==='telegram'&&$j['status']==='running')$j['status']='queued';unset($j);});
