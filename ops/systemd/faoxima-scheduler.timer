@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Faoxima central scheduler every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+RandomizedDelaySec=20
+Persistent=true
+AccuracySec=1s
+Unit=faoxima-scheduler.service
+
+[Install]
+WantedBy=timers.target

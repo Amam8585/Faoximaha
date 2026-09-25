@@ -1,0 +1,17 @@
+{
+  "web_root": "/var/www/faoxima",
+  "source_root": "/opt/faoxima-template/current",
+  "state_root": "/var/lib/faoxima-provisioner",
+  "lock_root": "/run/lock/faoxima-provisioner",
+  "domain": "kanamir.faoximabot.xyz",
+  "php_binary": "/usr/bin/php8.3",
+  "fpm_pool_root": "/etc/php/8.3/fpm/pool.d",
+  "fpm_service": "php8.3-fpm.service",
+  "database": {
+    "dsn": "mysql:host=localhost;charset=utf8mb4",
+    "user": "faoxima_provisioner",
+    "password": "READ_FROM_ROOT_ONLY_DEPLOYMENT_SECRET",
+    "mysql_binary": "/usr/bin/mysql",
+    "mysqldump_binary": "/usr/bin/mysqldump"
+  }
+}

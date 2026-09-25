@@ -1,0 +1,19 @@
+[Unit]
+Description=Faoxima central multi-bot scheduler
+After=network-online.target mysql.service php8.3-fpm.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/php8.3 /usr/local/lib/faoxima/provisioning/scheduler.php
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/faoxima /var/lib/faoxima-provisioner /run/lock/faoxima-provisioner
+TimeoutStartSec=10min
