@@ -1,0 +1,68 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Faoxima\Provisioning\CommandRunner;
+use Faoxima\Provisioning\PdoDatabaseAdmin;
+use Faoxima\Provisioning\Provisioner;
+use Faoxima\Provisioning\TelegramClient;
+
+foreach (['ProvisioningException.php', 'Contracts.php', 'CommandRunner.php', 'AtomicFilesystem.php', 'ConfigEditor.php', 'PdoDatabaseAdmin.php', 'TelegramClient.php', 'Provisioner.php'] as $file) {
+    require dirname(__DIR__) . '/provisioning/' . $file;
+}
+
+$usage = <<<'TXT'
+Usage:
+  faoxima-provision --config FILE preflight
+  faoxima-provision --config FILE install bot_N VERSION TOKEN_FILE ADMIN_ID
+  faoxima-provision --config FILE update bot_N VERSION
+  faoxima-provision --config FILE pause|resume|suspend|unsuspend|expire|renew bot_N
+  faoxima-provision --config FILE rotate-token bot_N NEW_TOKEN_FILE
+  faoxima-provision --config FILE delete bot_N
+TXT;
+
+try {
+    if (PHP_SAPI !== 'cli' || ($argv[1] ?? '') !== '--config' || !isset($argv[2], $argv[3])) {
+        throw new InvalidArgumentException($usage);
+    }
+    if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+        throw new RuntimeException('Provisioning must run as root.');
+    }
+    $file = realpath($argv[2]);
+    if ($file === false || !is_file($file) || fileperms($file) === false || (fileperms($file) & 0o077) !== 0) {
+        throw new RuntimeException('Config must exist and must not be accessible by group/others (mode 0600).');
+    }
+    $config = json_decode((string) file_get_contents($file), true, 32, JSON_THROW_ON_ERROR);
+    if (!is_array($config) || !is_array($config['database'] ?? null)) { throw new RuntimeException('Missing database configuration.'); }
+    $db = $config['database']; unset($config['database'], $config['enforce_ownership']);
+    $commands = new CommandRunner();
+    $pdo = new PDO((string) ($db['dsn'] ?? ''), (string) ($db['user'] ?? ''), (string) ($db['password'] ?? ''),
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_EMULATE_PREPARES => false]);
+    $database = new PdoDatabaseAdmin($pdo, $commands, (string) ($db['mysql_binary'] ?? '/usr/bin/mysql'), (string) ($db['mysqldump_binary'] ?? '/usr/bin/mysqldump'));
+    $provisioner = new Provisioner($database, new TelegramClient(), $commands, $config);
+    $command = $argv[3]; $name = $argv[4] ?? '';
+    $readToken = static function (string $path): string {
+        $real = realpath($path);
+        if ($real === false || !is_file($real) || (fileperms($real) & 0o077) !== 0) { throw new RuntimeException('Token file must exist with mode 0600.'); }
+        $token = trim((string) file_get_contents($real));
+        if ($token === '') { throw new RuntimeException('Token file is empty.'); }
+        return $token;
+    };
+    match ($command) {
+        'preflight' => $provisioner->preflight(),
+        'install' => isset($argv[7]) ? $provisioner->installBot($name, $argv[5], $readToken($argv[6]), $argv[7]) : throw new InvalidArgumentException($usage),
+        'update' => isset($argv[5]) ? $provisioner->updateBot($name, $argv[5]) : throw new InvalidArgumentException($usage),
+        'pause' => $provisioner->transition($name, 'paused'),
+        'resume', 'unsuspend', 'renew' => $provisioner->transition($name, 'active'),
+        'suspend' => $provisioner->transition($name, 'suspended'),
+        'expire' => $provisioner->transition($name, 'expired'),
+        'rotate-token' => isset($argv[5]) ? $provisioner->rotateToken($name, $readToken($argv[5])) : throw new InvalidArgumentException($usage),
+        'delete' => $provisioner->deleteBot($name),
+        default => throw new InvalidArgumentException($usage),
+    };
+    fwrite(STDOUT, json_encode(['ok' => true, 'command' => $command, 'at' => gmdate(DATE_ATOM)], JSON_THROW_ON_ERROR) . "\n");
+} catch (Throwable $error) {
+    fwrite(STDERR, json_encode(['ok' => false, 'error' => $error->getMessage()], JSON_UNESCAPED_SLASHES) . "\n");
+    exit(1);
+}

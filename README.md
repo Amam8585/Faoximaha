@@ -119,6 +119,10 @@
 
 ## 📚 مستندات و آموزش نصب
 
+### Provisioning چندرباته روی یک سرور
+
+برای استقرار host-native صدها Bot با source، Linux user، PHP-FPM pool، دیتابیس و webhook مستقل، تعویض اتمیک release، rollback نصب/آپدیت و scheduler مرکزی از ابزار CLI جدید استفاده کنید. این معماری بدون container و بدون runtime مشترک است. طراحی عملیاتی و ترتیب دقیق `installBot()`، `updateBot()` و `deleteBot()` در [راهنمای Provisioning](docs/PROVISIONING.fa.md) مستند شده است؛ تنظیمات امن اولیه نیز در `provisioning/config.example.json` قرار دارد.
+
 > [!IMPORTANT]
 > **آموزش‌های کامل و قدم‌به‌قدم نصب، پیکربندی سرور و هاست، مهاجرت و رفع خطاها در وب‌سایت رسمی مستندات فاکسیما قرار داده شده است.**
 
