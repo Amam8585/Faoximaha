@@ -1,12 +1,12 @@
 {
   "web_root": "/var/www/faoxima",
-  "source_root": "/opt/faoxima-template/current",
+  "source_root": "/opt/muteshop/template",
   "state_root": "/var/lib/faoxima-provisioner",
   "lock_root": "/run/lock/faoxima-provisioner",
   "domain": "kanamir.faoximabot.xyz",
+  "url_prefix": "/faoxima",
   "php_binary": "/usr/bin/php8.3",
-  "fpm_pool_root": "/etc/php/8.3/fpm/pool.d",
-  "fpm_service": "php8.3-fpm.service",
+  "runtime_user": "www-data",
   "database": {
     "dsn": "mysql:host=localhost;charset=utf8mb4",
     "user": "faoxima_provisioner",

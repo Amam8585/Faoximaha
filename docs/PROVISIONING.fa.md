@@ -1,119 +1,135 @@
-# Provisioning نهایی چندرباتهٔ Faoxima (Host-native)
+# Provisioning سادهٔ چندرباتهٔ Faoxima
 
-این پیاده‌سازی عمداً از Docker، runtime مشترک و `childDispatch` استفاده نمی‌کند. هر Bot کپی مستقل Faoxima، `config.php`، دیتابیس، MySQL user، Linux user و PHP-FPM pool مستقل دارد؛ همهٔ poolها زیر یک سرویس مشترک `php8.3-fpm.service` اجرا می‌شوند. دامنهٔ این استقرار `kanamir.faoximabot.xyz` است، ولی token در Git ذخیره نمی‌شود و فقط هنگام اجرای CLI دریافت می‌شود.
+معماری نهایی برای Botهای جدید مستقل است و از container، `childDispatch`، Linux user اختصاصی، FPM pool اختصاصی، socket اختصاصی، release symlink یا `.instances` استفاده نمی‌کند:
 
-## گزارش Audit پیش از اصلاح
+```text
+Telegram -> https://kanamir.faoximabot.xyz/faoxima/bot_N/index.php
+         -> Nginx generic route
+         -> /run/php/php8.3-fpm.sock (shared www-data pool)
+         -> /var/www/faoxima/bot_N/ (real directory)
+         -> muteshop_bot_00000N / mbot_00000N@localhost
+```
 
-| CHECK | STATUS | دلیل از نسخهٔ قبلی Source |
+## نتیجهٔ Audit
+
+| CHECK | RESULT | مدرک/توضیح |
 |---|---|---|
-| Independent folder install | FIX NEEDED | مسیر `/opt/faoxima-bots` و container مستقل بود، نه `/var/www/faoxima/bot_N` روی FPM مشترک. |
-| DB isolation | OK | برای هر Bot schema و MySQL user جدا ساخته می‌شد؛ این اصل حفظ شد. |
-| Webhook direct | OK | URL مستقیماً به `/<bot>/index.php` اشاره می‌کرد؛ `childDispatch` استفاده نمی‌شد. |
-| Webhook secret | FIX NEEDED | Provisioner از HMAC نام Bot استفاده می‌کرد، ولی `FaoximaWebhookAuth` مقدار `sha256(token + suffix)` را انتظار دارد. |
-| Template clean | FIX NEEDED | copy کامل می‌توانست log/cache/compiled artifact و فایل runtime را به Bot جدید منتقل کند. |
-| Faoxima initialization | OK | `table.php` اجرا می‌شد، ولی اکنون وجود جدول‌های ضروری هم صریحاً بررسی می‌شود. |
-| Atomic install | FIX NEEDED | mount فقط‌خواندنی با entrypoint بازنویس `config.php` ناسازگار بود و publish نهایی health-check نداشت. |
-| Rollback | FIX NEEDED | rollbackهای DB، FPM identity، state و config ownership کامل و قابل آزمون نبودند. |
-| Retry | FIX NEEDED | پاسخ API، `retry_after` و تفکیک 4xx غیرقابل‌تکرار از 429/5xx درست مدل نشده بود. |
-| Update | FIX NEEDED | webhook هنگام migration فعال می‌ماند و state قبلی pause/suspend/expire به active تبدیل می‌شد. |
-| Pause/Resume | FIX NEEDED | متکی به stop/start container بود و نتیجهٔ حذف/ثبت webhook verify نمی‌شد. |
-| Expire/Renew | FIX NEEDED | همان وابستگی container و نبود verification را داشت. |
-| Suspend/Unsuspend | FIX NEEDED | همان وابستگی container و نبود verification را داشت. |
-| Token rotation | FIX NEEDED | rotation در state متوقف نیز webhook را فعال می‌کرد و atomic write مالک FPM را حفظ نمی‌کرد. |
-| Delete | FIX NEEDED | مدل container/nginx اختصاصی بود و backup پس از حذف نگه‌داری نمی‌شد. |
-| Cron scheduler | FIX NEEDED | scheduler مرکزی host-native و lock مشترک lifecycle وجود نداشت. |
-| Nginx | FIX NEEDED | route تولیدی با release symlink و `SCRIPT_FILENAME` واقعی سازگار نبود و generic نبود. |
-| Permissions | FIX NEEDED | pool واقعی `user/group` صریح نداشت و `config.php` می‌توانست برای FPM ناخوانا یا برای group خوانا شود. |
-| Security | FIX NEEDED | password در argv، dump در RAM، token در argv و جداسازی ناکافی OS user وجود داشت. |
+| Real directory per bot | PASS (SIMULATED) | install مستقیماً stage مخفی را با `rename` به `bot_N` تبدیل می‌کند و تست `is_dir && !is_link` دارد. |
+| No per-bot Linux user | PASS | هیچ `useradd`، `userdel` یا `fx_bot_N` در control plane جدید نیست. |
+| No per-bot FPM pool | PASS | فایل pool تولید نمی‌شود و Nginx فقط socket مشترک را دارد. |
+| No `.instances` architecture | PASS (SIMULATED) | directory نهایی واقعی است؛ تست عدم وجود `.instances` را assert می‌کند. |
+| Shared PHP 8.3-FPM | SERVER VALIDATION REQUIRED | config به `/run/php/php8.3-fpm.sock` اشاره می‌کند؛ وجود socket و User مؤثر باید روی سرور با `php-fpm8.3 -tt` تأیید شود. |
+| Generic Nginx route | SIMULATED | یک route ثابت `/faoxima/bot_N/` وجود دارد؛ parser تست آن را بررسی می‌کند. |
+| No Nginx reload per bot | PASS | install/update/delete هیچ `nginx reload` یا `systemctl` اجرا نمی‌کنند. |
+| Independent DB | SIMULATED | نام schema برابر `muteshop_bot_00000N` است. |
+| Restricted DB user | SIMULATED | `mbot_00000N@localhost` فقط روی schema خودش `GRANT ALL` دارد. |
+| Direct webhook | SIMULATED | URL مستقیم `.../faoxima/bot_N/index.php` ثبت و با `getWebhookInfo` verify می‌شود. |
+| Atomic install | PASS (SIMULATED) | template در `.bot_N.new-RANDOM` آماده و سپس rename می‌شود. |
+| Atomic update | PASS (SIMULATED) | `.new` آماده، `bot_N` به `.backup` و `.new` به `bot_N` rename می‌شود. |
+| Rollback | PASS (SIMULATED) | failureهای migration/webhook/token/delete و DB در تست تزریق شده‌اند. |
+| Retry | PASS (SIMULATED) | FRESH، OWNED_EXISTING و UNKNOWN_CONFLICT و retry امن Telegram پوشش داده شده‌اند. |
+| Lifecycle integration | PASS (STATIC + SIMULATED) | install/update/pause/renew/retoken/delete/suspend/expiry به Provisioner متصل‌اند. |
+| Central scheduler | PASS (SIMULATED) | `cron/cron.php` واقعی با working directory ریشهٔ Bot، lock، timeout و concurrency محدود اجرا می‌شود. |
+| Secret protection | PASS | token وارد Git/argv نمی‌شود و config عمومی توسط Nginx block است. |
+| Main bot integration | PASS (STATIC) | call siteهای واقعی `bot.php` به lifecycle وصل شده‌اند. |
 
-## معماری و مالکیت واقعی processها
+`PASS (SIMULATED)` به معنی اجرای تست با filesystem، process runner، DB و Telegram mock است. `SERVER VALIDATION REQUIRED` عمداً PASS قطعی نیست.
 
-```text
-/var/www/faoxima/
-├── .instances/                  root:www-data 0711 (فقط traverse؛ بدون directory listing)
-│   ├── bot_3-<random>/          root:fx_bot_3 0750 (source مستقل)
-│   ├── bot_4-<random>/          root:fx_bot_4 0750
-│   └── ...
-├── bot_3 -> .instances/bot_3-<random>   # publish/switch اتمیک
-├── bot_4 -> .instances/bot_4-<random>
-└── ...
+## User واقعی Processها
 
-/etc/php/8.3/fpm/pool.d/faoxima-bot_3.conf
-/var/lib/faoxima-provisioner/bot_3.json
-/run/lock/faoxima-provisioner/bot_3.lock
-```
+فایل shared pool موجود پروژه `docker/php/pool.d/www.conf` نام pool را `[www]` نشان می‌دهد، اما در آن image directive صریح `user/group` وجود ندارد. معماری host-native هدف از socket استاندارد `/run/php/php8.3-fpm.sock` استفاده می‌کند و setup برای `www-data` نوشته شده است. unit واقعی scheduler نیز `User=www-data` و `Group=www-data` دارد. User نهایی FPM را باید روی سرور از خروجی `php-fpm8.3 -tt` و فایل `/etc/php/8.3/fpm/pool.d/www.conf` تأیید کرد؛ اگر متفاوت بود، `runtime_user` و مالکیت setup باید همان User شوند.
 
-سرویس مادر همان `php8.3-fpm.service` سیستم است. pool تولیدشدهٔ `bot_3` صریحاً `user=fx_bot_3` و `group=fx_bot_3` دارد؛ بنابراین workerهای Bot دیگر نمی‌توانند `config.php` آن را بخوانند. socket متعلق به `www-data:www-data` است تا فقط Nginx به FPM متصل شود. نمونهٔ واقعی pool در `ops/php-fpm/faoxima-bot-pool.example.conf` و unitهای scheduler در `ops/systemd/` قرار دارند.
-
-فایل‌های source برابر `root:fx_bot_N 0640` و دایرکتوری‌ها `0750` هستند. فقط `logs`, `storage`, `cron`, `cronbot` متعلق به `fx_bot_N` و writable هستند. `config.php` قبل از rename اتمیک، با مالک `fx_bot_N:fx_bot_N` و mode `0600` ساخته می‌شود؛ در نتیجه FPM همیشه نسخه‌ای کامل و خوانا می‌بیند و هیچ پنجره‌ای با فایل root-only وجود ندارد. ACL فقط برای static fileها به `www-data` حق read می‌دهد و روی `config.php` صریحاً حذف می‌شود.
-
-## Lifecycle و State Machine
+Permission هدف پس از setup:
 
 ```text
-install -> active
-active -> paused -> active       (resume)
-active -> suspended -> active    (unsuspend)
-active -> expired -> active      (renew)
-active|paused|suspended|expired -> updating -> همان state قبلی
-هر state پایدار -> deleting -> deleted
+/var/www/faoxima                www-data:www-data 0750
+/var/www/faoxima/bot_N          www-data:www-data 0750
+normal files                    www-data:www-data 0640
+config.php                      www-data:www-data 0640
+/var/lib/faoxima-provisioner    www-data:www-data 0750
+/run/lock/faoxima-provisioner   www-data:www-data 0750
 ```
 
-Pause، Suspend و Expire webhook را مستقیم از Telegram حذف و نتیجه را با `getWebhookInfo` بررسی می‌کنند. Resume، Unsuspend و Renew webhook مستقیم `https://kanamir.faoximabot.xyz/bot_N/index.php` را همراه secret سازگار با `FaoximaWebhookAuth` ثبت و مجدداً verify می‌کنند. scheduler فقط state=`active` را اجرا می‌کند.
+PHP-FPM باید `config.php` را بخواند. حفاظت secret در لایهٔ HTTP با deny صریح Nginx انجام می‌شود، نه با ناخوانا کردن config برای runtime.
 
-## ترتیب دقیق `installBot()`
-
-1. اعتبارسنجی سخت `bot_N`، version، token و admin ID؛ 2. `flock` اختصاصی؛ 3. رد هر folder/DB/user باقی‌مانده؛ 4. `getMe` پیش از ایجاد resource؛ 5. ایجاد Linux user و FPM pool و اجرای `php-fpm8.3 -tt`؛ 6. کپی clean source بدون symlink، `.git` یا `.env`؛ 7. ایجاد schema/user مستقل و password تصادفی؛ 8. تولید اتمیک `config.php`؛ 9. اجرای واقعی `table.php` با user همان Bot؛ 10. بررسی جدول‌های `users` و `setting`؛ 11. permission/ACL؛ 12. rename instance و ساخت اتمیک symlink عمومی؛ 13. health-check محلی Nginx/FPM؛ 14. `setWebhook` و `getWebhookInfo`؛ 15. ثبت state. شکست، webhook، symlink، files، DB/user، pool و Linux user را معکوس می‌کند.
-
-## ترتیب دقیق `updateBot()`
-
-1. lock و خواندن config/state؛ 2. dump streaming و mode `0600`؛ 3. `getMe`؛ 4. حذف موقت webhook فقط اگر Bot active است؛ 5. کپی clean source به stage؛ 6. تولید config با credential قبلی؛ 7. migration و بررسی جدول‌ها؛ 8. ownership؛ 9. rename به instance جدید؛ 10. تعویض اتمیک symlink `bot_N`؛ 11. health-check؛ 12. بازیابی webhook active؛ 13. حفظ state قبلی و ثبت version؛ 14. حذف instance قبلی. هر failure، symlink قبلی، dump دیتابیس، webhook و state قبلی را restore می‌کند.
-
-## ترتیب دقیق `deleteBot()`
-
-1. lock؛ 2. backup دیتابیس؛ 3. حذف و verify webhook؛ 4. state=`deleting`؛ 5. unlink مسیر عمومی و انتقال instance به quarantine؛ 6. حذف pool و reload مشترک FPM؛ 7. drop user/schema با compensation؛ 8. حذف Linux user، state و quarantine. backup ریشه‌ای با mode `0600` برای بازیابی پس از حذف عمدی نگه‌داری می‌شود. اگر drop دیتابیس fail شود، pool، instance، symlink، webhook و state قبلی بازسازی می‌شوند.
-
-## Retry، امنیت و Failureها
-
-* تنها درخواست‌های retry-safe تلگرام برای timeout، HTTP 429 و 5xx با exponential backoff، jitter و احترام به `retry_after` تکرار می‌شوند؛ token نامعتبر (4xx) فوراً fail می‌شود.
-* همهٔ processها timeout دارند. dump/restore stream می‌شود و password از طریق defaults file تصادفی `0600` عبور می‌کند، نه argv یا log.
-* نام Bot تنها `^bot_[1-9][0-9]{0,8}$` است. path مطلق normalize می‌شود؛ template symlink پذیرفته نمی‌شود؛ recursive delete فقط child مستقیم `.instances` را حذف می‌کند.
-* Nginx یک route generic دارد، dotfile/secret/backup/runtime/config/table را مسدود می‌کند و فقط socket pool همان Bot را انتخاب می‌کند.
-* `flock` مشترک provisioner و scheduler از install/update/delete/cron هم‌زمان برای یک Bot جلوگیری می‌کند، ولی Botهای مختلف موازی هستند.
-* token ارائه‌شده در issue/chat یک secret افشاشده محسوب می‌شود و عمداً وارد repository نشده است. CLI فقط مسیر token file با mode `0600` را می‌پذیرد تا token در Git، shell history و process list دیده نشود؛ token افشاشده باید در BotFather rotate شود.
-
-## Scheduler مرکزی
-
-`faoxima-scheduler.timer` هر دقیقه با حداکثر ۲۰ ثانیه jitter اجرا می‌شود. scheduler فقط stateهای active را می‌خواند، symlink را داخل `.instances` validate می‌کند، lock همان Bot را می‌گیرد و `cron/cron.php` را با Linux user اختصاصی `fx_bot_N` و timeout چهار دقیقه اجرا می‌کند. در نتیجه cron collision بین lifecycle و job ممکن نیست.
-
-## نصب فایل‌های Service
+## Setup یک‌بارهٔ root
 
 ```bash
-install -m 0755 bin/faoxima-provision /usr/local/sbin/faoxima-provision
-install -d -m 0700 /etc/faoxima /var/lib/faoxima-provisioner /run/lock/faoxima-provisioner
-install -m 0600 provisioning/config.example.json /etc/faoxima/provisioning.json
+install -d -o www-data -g www-data -m 0750 /var/www/faoxima /var/lib/faoxima-provisioner /run/lock/faoxima-provisioner
+install -d -o root -g www-data -m 0750 /opt/muteshop/template
 install -m 0644 ops/nginx/faoxima-bots.conf /etc/nginx/snippets/faoxima-bots.conf
 install -m 0644 ops/systemd/faoxima-scheduler.service /etc/systemd/system/
 install -m 0644 ops/systemd/faoxima-scheduler.timer /etc/systemd/system/
 install -d -m 0755 /usr/local/lib/faoxima/provisioning
 install -m 0644 provisioning/scheduler.php /usr/local/lib/faoxima/provisioning/scheduler.php
+nginx -t && php-fpm8.3 -tt
 systemctl daemon-reload
 systemctl enable --now faoxima-scheduler.timer
 ```
 
-snippet Nginx باید داخل server TLS دامنه include شود. سپس:
+snippet فقط یک بار داخل TLS server دامنه include می‌شود. پس از setup، Main Bot با همان runtime user همهٔ lifecycle روزمره را انجام می‌دهد؛ ساخت Bot به root، sudo، reload Nginx، Linux user یا FPM pool جدید نیاز ندارد.
+
+## Flowها
+
+### Install
+
+`getMe -> lock -> .new -> FRESH یا OWNED_EXISTING DB -> secure template copy/config -> idempotent table.php -> table verification -> permissions -> rename to bot_N -> local HTTP check -> direct setWebhook/getWebhookInfo -> active`
+
+* `FRESH`: schema و user وجود ندارند؛ ساخته می‌شوند و callback کنترل‌پلین credential رمزگذاری‌شده را فوراً در Bot Record ثبت می‌کند.
+* `OWNED_EXISTING`: نام schema/user دقیقاً مطابق Bot ID است، credential رمزگشایی‌شدهٔ همان record احراز اتصال می‌شود و grantها فقط schema همان Bot را پوشش می‌دهند؛ DB/user/password reuse و migration تکرار می‌شود.
+* `UNKNOWN_CONFLICT`: هر resource ناقص، credential نامعتبر/غایب یا grant اضافی با `SAFE CONFLICT` متوقف می‌شود؛ هیچ drop/adopt خودکار انجام نمی‌شود.
+
+### Update
+
+`DB dump -> disable active webhook -> .new secure copy -> preserve verified PERSISTENT_PATHS -> migration -> validation -> bot_N to .backup -> .new to bot_N -> HTTP verification -> webhook restore -> remove .backup`
+
+`PERSISTENT_PATHS` واقعی: `logs/`, `storage/`, `cronbot/.runtime/`, فایل‌های صف `cronbot/{users.json,users.txt,users.txt.new,info,gift,username.json}`, `users.json`, `optimization_config.php` و logهای runtime ریشه. `cron.lock` و `.cron_internal_auth` transient هستند و preserve نمی‌شوند. assetهای `app/assets` و سایر assetها source ثابت‌اند و از template تازه می‌آیند.
+
+در شکست بعد از swap، bot جدید quarantine/حذف و `.backup` به directory واقعی `bot_N` بازگردانده می‌شود؛ DB dump، webhook و state قبلی نیز restore می‌شوند.
+
+### Delete
+
+`DB backup -> deleteWebhook verification -> bot_N to .delete quarantine -> DROP restricted user/schema -> remove quarantine -> remove metadata`
+
+تا قبل از DROP schema، شکست باعث بازگشت directory، webhook و state قبلی می‌شود. پس از DROP ادعای rollback کامل وجود ندارد: شکست cleanup، state=`delete_failed` همراه quarantine و backup می‌نویسد؛ اجرای مجدد delete cleanup را resume می‌کند و Bot Record تا موفقیت نهایی باقی می‌ماند. dump فقط تا پایان delete نگه داشته می‌شود؛ در موفقیت یا تکمیل retry حذف می‌شود.
+
+## Scheduler
+
+Faoxima واقعاً entry point برابر `cron/cron.php` دارد. scheduler مرکزی فقط stateهای `active` و directory واقعی `bot_N` را می‌پذیرد، lock مشترک lifecycle را می‌گیرد، jobها را با concurrency محدود و configurable (پیش‌فرض ۴، بازهٔ ۱ تا ۱۶ از `FAOXIMA_SCHEDULER_CONCURRENCY`) و stagger کوتاه اجرا می‌کند و timeout چهار دقیقه دارد. unit با `www-data` اجرا می‌شود؛ root و `sudo -u` استفاده نمی‌شوند.
+
+## مسیرهای Private و Public Nginx
+
+`storage/` public نیست: Source واقعی فقط `storage/private/api-token` و cache داخلی را آنجا می‌نویسد. `logs/` شامل log است؛ `cron/cronbot` entrypoint/queue داخلی‌اند؛ `lib`, `re`, `api/lib`, `api/handlers`, `panel/lib`, `provisioning`, `tests`, `ops`, `bin`, `installer` کد داخلی‌اند. این مسیرها deny هستند. در مقابل `app/assets`, endpointهای public `api`, `panel`, `payment`, `sub` و فایل‌های static معمول از route generic عبور می‌کنند.
+
+## Production entrypoint و call siteها
+
+* Repository production entrypoint: `bot.php`.
+* Deployed production entrypoint: `/var/www/muteshop/bot.php`.
+* Deployment mapping: فایل repository `bot.php` مستقیماً با همین نام در مسیر deployed نصب می‌شود؛ فایل واسط/demo دیگری وجود ندارد.
+
+
+* `installBot()` بعد از تأیید مدیر، نصب کامل و webhook مستقیم را انجام می‌دهد.
+* `bot_update`، `pause/resume`، `renew_pay`، `retoken`، `bot_delete_confirm` و `suspend/unsuspend` مستقیماً Provisioner را صدا می‌زنند.
+* `expiryReminders()` وضعیت expired را به lifecycle منتقل و webhook را حذف می‌کند.
+* `childDispatch` فقط برای compatibility قدیمی باقی مانده است؛ هیچ webhook جدید Faoxima به `?child=N` ثبت نمی‌شود.
+
+توکن افشاشدهٔ گفتگو داخل repository قرار داده نشده است. آن token باید در BotFather rotate و مقدار جدید فقط از secret storage/runtime وارد شود.
+
+
+## Template clean verification
+
+جست‌وجوی کامل repository برای `MUTESHOP_FAOXIMA_RUNTIME`, `MUTESHOP_FAOXIMA_UPDATE_B64` و `muteshop-runtime.php` بدون نتیجه است. `botapi.php` payload واقعی webhook را مستقیماً از `php://input` می‌خواند؛ CLI/B64 update injection وجود ندارد.
+
+## Final server validation checklist
+
+تا اجرای موارد زیر روی Host وضعیت Shared FPM/Nginx برابر `SERVER VALIDATION REQUIRED` است:
 
 ```bash
-faoxima-provision --config /etc/faoxima/provisioning.json preflight
-install -m 0600 /dev/null /run/faoxima-bot-token
-# secret manager مقدار token را در /run/faoxima-bot-token می‌نویسد
-faoxima-provision --config /etc/faoxima/provisioning.json install bot_3 1.1.1 /run/faoxima-bot-token "$ADMIN_ID"
-faoxima-provision --config /etc/faoxima/provisioning.json pause bot_3
-faoxima-provision --config /etc/faoxima/provisioning.json resume bot_3
-faoxima-provision --config /etc/faoxima/provisioning.json suspend bot_3
-faoxima-provision --config /etc/faoxima/provisioning.json unsuspend bot_3
-faoxima-provision --config /etc/faoxima/provisioning.json expire bot_3
-faoxima-provision --config /etc/faoxima/provisioning.json renew bot_3
-faoxima-provision --config /etc/faoxima/provisioning.json rotate-token bot_3 /run/faoxima-new-token
-faoxima-provision --config /etc/faoxima/provisioning.json update bot_3 1.1.2
-faoxima-provision --config /etc/faoxima/provisioning.json delete bot_3
+find /var/www/muteshop /opt/muteshop/template -name '*.php' -type f -exec php8.3 -l {} \;
+nginx -t
+php-fpm8.3 -tt
+systemctl status --no-pager php8.3-fpm
+systemctl status --no-pager nginx
+test -S /run/php/php8.3-fpm.sock
+sed -n '/^[[:space:]]*user[[:space:]]*=/p;/^[[:space:]]*group[[:space:]]*=/p;/^[[:space:]]*listen[[:space:]]*=/p' /etc/php/8.3/fpm/pool.d/www.conf
 ```

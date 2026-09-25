@@ -5,8 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=root
-Group=root
+User=www-data
+Group=www-data
+Environment=FAOXIMA_SCHEDULER_CONCURRENCY=4
 ExecStart=/usr/bin/php8.3 /usr/local/lib/faoxima/provisioning/scheduler.php
 Nice=10
 IOSchedulingClass=best-effort
@@ -16,4 +17,5 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/www/faoxima /var/lib/faoxima-provisioner /run/lock/faoxima-provisioner
-TimeoutStartSec=10min
+# Each child has its own 240s timeout; do not kill a large bounded batch globally.
+TimeoutStartSec=0

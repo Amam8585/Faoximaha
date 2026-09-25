@@ -7,7 +7,11 @@ namespace Faoxima\Provisioning;
 interface DatabaseAdmin
 {
     /** @return array{name:string,user:string,password:string} */
-    public function create(string $botName): array;
+    /**
+     * @param array{name:string,user:string,password:string}|null $ownedCredentials
+     * @return array{name:string,user:string,password:string,status:'FRESH'|'OWNED_EXISTING'}
+     */
+    public function provision(string $botName, ?array $ownedCredentials = null): array;
     public function exists(string $botName): bool;
     /** @param array{name:string,user:string,password:string} $credentials */
     public function dump(array $credentials, string $destination): void;
@@ -21,6 +25,6 @@ interface TelegramGateway
     public function getMe(string $token): array;
     public function setWebhook(string $token, string $url, string $secret): void;
     public function deleteWebhook(string $token): void;
-    /** @return array{url:string,pending_update_count:int} */
+    /** @return array{url:string,pending_update_count:int,last_error_message:string} */
     public function getWebhookInfo(string $token): array;
 }

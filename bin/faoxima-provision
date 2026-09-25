@@ -26,16 +26,13 @@ try {
     if (PHP_SAPI !== 'cli' || ($argv[1] ?? '') !== '--config' || !isset($argv[2], $argv[3])) {
         throw new InvalidArgumentException($usage);
     }
-    if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
-        throw new RuntimeException('Provisioning must run as root.');
-    }
     $file = realpath($argv[2]);
     if ($file === false || !is_file($file) || fileperms($file) === false || (fileperms($file) & 0o077) !== 0) {
         throw new RuntimeException('Config must exist and must not be accessible by group/others (mode 0600).');
     }
     $config = json_decode((string) file_get_contents($file), true, 32, JSON_THROW_ON_ERROR);
     if (!is_array($config) || !is_array($config['database'] ?? null)) { throw new RuntimeException('Missing database configuration.'); }
-    $db = $config['database']; unset($config['database'], $config['enforce_ownership']);
+    $db = $config['database']; unset($config['database']);
     $commands = new CommandRunner();
     $pdo = new PDO((string) ($db['dsn'] ?? ''), (string) ($db['user'] ?? ''), (string) ($db['password'] ?? ''),
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_EMULATE_PREPARES => false]);
